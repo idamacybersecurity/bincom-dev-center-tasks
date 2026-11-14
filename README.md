@@ -8,6 +8,43 @@ The projects below demonstrate my practical experience in application security, 
 # 2. Enterprise DevSecOps & Container Supply Chain Security
 ---
 
+# End-to-End Correlated AI Defense — Real-Time eBPF Event Attribution, Kernel Enforcement (SIGKILL) & Output Leakage Prevention
+
+Designed, implemented, and tested an end-to-end correlated AI defense pipeline within the Enterprise DevSecOps Pipeline, extending the AI Agent Runtime Security framework with a streaming SOAR daemon, enforcing kernel-level Tetragon policies, and an outbound LLM response DLP proxy. The work closed two gaps from the previous milestone: the absence of a matching event-to-container evidence chain, and a Tetragon policy that only monitored. It also addressed the response-contamination risk by inspecting every model response before it reaches the caller.
+
+### Key Activities
+
+- Developed `correlated_soar_daemon.py`, a streaming consumer of the live Tetragon event stream (`tetra getevents`, policy-filtered, JSON output, automatic reconnection) that acts on each event as it arrives.
+- Implemented strict event validation covering policy identity, kernel hook, action, `/workspace/output/` path with traversal checks, write permission value, successful return value, parsable timestamp, and container ID format.
+- Resolved the container ID prefix in each event to exactly one full Docker container ID and validated the target against nine conditions: ID match, container name, image, running state, three required security labels, non-privileged, network mode `none`, read-only root filesystem, and all capabilities dropped.
+- Preserved dry-run-by-default behavior, with explicit `--execute` authorization to send SIGKILL (`docker kill --signal KILL`) and to verify the exited state and exit code `137` before reporting quarantine success.
+- Recorded timing from the Tetragon event timestamp to Docker's `FinishedAt` and to verified exit, marking each timing `valid` only when the data was present, well formed, and not earlier than the event.
+- Executed a 10-run live benchmark on fresh disposable containers: all ten were quarantined with exit code `137` and a valid timing status. Median event-to-termination time was 0.254 s (range 0.211–0.347 s); median event-to-verified-exit time was 0.365 s (range 0.310–0.491 s).
+- Captured a single unbroken Test A trace for one container (`55e63a434da5…`): the Tetragon event `docker` field, the SOAR daemon `QUARANTINED` record, and Docker inspection (`exited`, exit code `137`) all refer to the same container, with the recorded times consistent. This resolved the previous milestone's evidence-correlation qualification.
+- Authored enforcing Tetragon TracingPolicies on the `bprm_check_security` LSM hook with a `Sigkill` action, scoped to the protected container's PID namespace.
+- Demonstrated monitor versus enforce behavior on the same action: under the monitor-only policy Bash ran and exited `0`; under the enforcing policy the same attempt returned `137` and Tetragon recorded `KPROBE_ACTION_SIGKILL`.
+- Verified kernel enforcement against `/bin/bash`, `/usr/bin/bash`, `dash` (the `sh` implementation), `curl`, `wget`, `nc`, and `nc.openbsd`, with enforcement counters incrementing and the main container remaining available in the `docker exec` tests.
+- Proved enforcement against a container's main process: the main Python process attempting to exec Bash was killed, the container exited `137` with OOMKilled `false`, and the bypass marker was never emitted.
+- Tested a startup-gate bypass attempt and per-container enforcing policies (`docker-ai-agent-<container ID prefix>`) managed by a Docker Tetragon controller and startup gate.
+- Documented the scope of each test, including that the fresh-container test killed only the attempted Bash process and did not terminate PID 1, and that the PID namespace value in each policy is runtime-specific.
+- Developed `llm_egress_guard.py`, a DLP enforcement proxy for Ollama `/api/chat` and `/api/generate`, with `dlp_engine.py` applying four pattern rules (synthetic secret marker, private-key header, `/etc/passwd` records, `/etc/shadow` records) and a Shannon-entropy rule (32+ characters, 4.2 bits per character) to every string in a response.
+- Buffered streamed responses and inspected both individual chunks and fields joined across chunks, so a secret split across chunks is blocked before release. Blocked responses return HTTP `403` with rule, severity, and location only, and the audit log records metadata without response contents.
+- Isolated Ollama on an internal-only Docker network so the proxy is the only route to the model, and confirmed that a direct connection from the agent network timed out while requests through the proxy succeeded.
+- Validated Test C with the real model: a response containing the synthetic secret returned HTTP `403` and the marker did not reach the client. A controlled-upstream test confirmed the secret was absent from the agent output.
+- Executed 57 automated tests across four suites, all passing: 15 protected-agent, 7 DLP engine, 5 DLP HTTP integration, and 30 SOAR tests.
+- Scanned the protected agent CI image with Grype and recorded 0 critical, 0 high, and 3 medium findings (busybox CVE-2025-60876, no fix available).
+- Documented limitations in the report: the proxy blocks the whole response rather than redacting it, latency starts at the Tetragon event timestamp rather than an independent syscall time, enforcing policies are a denylist scoped by PID namespace, and the SOAR daemon targets one fixed disposable container.
+- Preserved Tetragon event files, SOAR execution logs, latency benchmark CSV and raw log, unbroken-trace records, proxy audit logs, Docker inspection output, policy files, and supporting screenshots.
+- Published the daemon, proxy, policies, tests, and evidence to the remote GitHub repository across milestone commits `362ec97`, `56b3e3e`, and `26a7635`, with the Tetragon policies and benchmark merged in pull request #2 and the unbroken trace in pull request #3 (`main` at `f6f2f19`).
+
+### Tools & Technologies
+
+`Python` `Ollama` `llama3.2` `AWS EC2` `Ubuntu Linux` `Docker` `Docker Networking` `Linux Security` `Cilium Tetragon v1.8.0` `eBPF` `TracingPolicy` `LSM Hooks` `Kernel Enforcement` `SIGKILL` `SOAR` `Event Correlation` `Automated Quarantine` `Data Loss Prevention` `Shannon Entropy` `Egress Proxy` `Runtime Threat Detection` `Latency Benchmarking` `JSONL Audit Logging` `Container Isolation` `Grype` `Regression Testing` `Git` `GitHub`
+
+ [View End-to-End Correlated AI Defense — Real-Time eBPF Event Attribution, Kernel Enforcement (SIGKILL) & Output Leakage Prevention](https://docs.google.com/document/d/1zogAl6igK5tDw5p5HTGCrOx6eY7QO5o-/edit?usp=sharing&ouid=117891865848714392423&rtpof=true&sd=true)
+ 
+---
+
 # AI Agent Runtime Security — eBPF Runtime Tool Guardrails & Autonomous Threat Interception
 
 Designed, implemented, and tested an AI Agent Runtime Security framework within the Enterprise DevSecOps Pipeline to evaluate AI agent tool-abuse risks, enforce application-level security guardrails, detect runtime activity through eBPF instrumentation, and automate container-level security response. The framework combines a locally hosted Ollama language model, Python-based AI agent tooling, adversarial testing, protected tool execution, Cilium Tetragon runtime monitoring, and a guarded Python SOAR response bridge.
